@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graph</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.4/dist/Chart.min.js"></script>
+    <!--<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.5.0/chart.min.js"></script>-->
+    <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+    <h1>Graph</h1>
+    
+
+    <form action="" method="post">  
+        <div class="form__fieldset">
+          <label for="amplitude" class="form__label">Amplitude:</label>
+          <input type="number" name="amplitude" id="amplitude" class="form__input" />
+        </div>
+  
+        <div class="form__fieldset">
+            <label for="period" class="form__label">Period:</label>
+            <input type="number" name="period" id="period" class="form__input" />
+          </div>
+  
+        <div class="form__fieldset">
+          <input
+            class="form__submit form__input"
+            type="submit"
+            value="Calculate"
+          />
+        </div>
+    </form>
+
+    <p>Amplitude = {{ waveParams[0] }}</p>
+    <p>Period = {{ waveParams[1] }}</p>    
+    <canvas id="lineChart" width="900" height="400"></canvas>
+    <script>
+        var ctx = document.getElementById("lineChart").getContext("2d");
+        var lineChart = new Chart(ctx, {
+            type: "line",
+            data: {
+                labels: {{ labels | safe }},
+                datasets: [
+                    {
+                        label: "Data points",
+                        data: {{ values | safe }},
+                        fill: false,
+                        borderColor: "rgb(75,192,192)",
+                        lineTension: 0.1
+                    }
+                ]
+            },
+            options: {
+                responsive: false
+            }
+        });
+    </script>
+
+
+    <form action="" method="get">  
+        <div class="form__fieldset">
+        <input
+            class="form__submit form__input"
+            type="submit"
+            value="Reset"
+        />
+        </div>
+    </form>
+
+</body>
+</html>
