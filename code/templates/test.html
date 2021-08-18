@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+
+<html lang="en">
+    <head>
+        
+        <meta charset="UTF-8">
+		<!--[if lt IE 9]>
+		<script src="http://html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+        <![endif]-->
+        
+        <title>Grid Forecaster 1.0 - Test</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="keywords" content="machine learning, electricity, grid, eirgrid, renewable energy">
+        <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.4/dist/Chart.min.js"></script>
+        <link rel="stylesheet" href="static/stylesheet.css">
+
+    </head>
+
+    <body> 
+
+        <div id="nav">
+            <!--<p id="presentpage"><a href="index.html">Home</a></p>-->
+
+            <!--**********************************************************************************************************-->
+            <div class="dropdown"> <!--https://www.w3schools.com/howto/howto_css_dropdown_navbar.asp-->
+                <p class="dropbtn">
+                    <!--<a href="index.html"><strong>Home</strong></a>-->
+                    <a id="home" href="/">Home</a>
+                    <i class="fa fa-caret-down"></i>
+                </p>
+            </div>
+
+            <div class="dropdown"> <!--https://www.w3schools.com/howto/howto_css_dropdown_navbar.asp-->
+                <p class="dropbtn">
+                    <!--<a href="forecast.html">Forecast</a>-->
+                    <a id="forecast" href="/forecast">Forecast</a>
+                    <i class="fa fa-caret-down"></i>
+                </p>
+            </div>
+
+            <div class="dropdown"> <!--https://www.w3schools.com/howto/howto_css_dropdown_navbar.asp-->
+                <p class="dropbtn">
+                    <!--<a href="test.html">Test</a>-->
+                    <a id="test" href="/test"><strong>Test</strong></a>
+                    <i class="fa fa-caret-down"></i>
+                </p>
+            </div>
+            
+            <!--**********************************************************************************************************-->
+
+        </div>
+
+        <div id="header">
+            <h1>Grid Forecaster 1.0</h1>
+        </div>
+
+        <div id="main">
+
+            <!--**********************************************************************************************************-->
+            <h2>Test a Model</h2>
+            <p>Choose a forecast variable and a model to test. 
+                Test metrics evaluated over the range of the test data set will be displayed in the table below. 
+                You can also generate a plot of the forecast vs true time series for a day within the test data set. </p>
+            
+            <form action="" method="post">
+        
+                <div class="form__fieldset">
+                    <label for="forecastVar" class="form__label">Forecast Variable to test:</label>
+                    <select name="forecastVar" id="forecastVar" class="form__input form__select">
+                        <option value="SystemDemand">System Demand</option>
+                        <option value="WindGeneration">Wind Generation</option>
+                        <option value="SystemGeneration" disabled>System Generation</option>
+                    </select>
+                </div>
+        
+                <div class="form__fieldset">
+                <label for="modelName" class="form__label">Model to test:</label>
+                <select name="modelName" id="modelName" class="form__input form__select">
+                    <option value="LR">Linear Regressor</option>
+                    <option value="NN">MLP Regressor (NN)</option>
+                    <option value="KN">K Neighbours Regressor</option>
+                    <option value="RF">Random Forest Regressor</option>
+                    <option value="SV" disabled>Support Vector Regressor</option>
+                </select>
+                </div>
+        
+                <div class="form__fieldset">
+                    <label for="date" class="form__label">Date to plot:</label>
+                    <input type="date" name="date" id="date" class="form__input" min='2020-01-01' max='2020-12-31'/>
+                    <p>Must be within test data set, i.e. between {{ testResults[-2] }} and {{ testResults[-1] }}</p>
+                </div>
+
+                <div class="form__fieldset">
+                <input
+                    class="form__submit form__input"
+                    type="submit"
+                    value="Test Model"
+                />
+                </div>
+            </form>
+
+            {% if modelName == '' %}
+                <p>Results will appear below</p>
+            {% else %}
+
+                <h2>Test Results for {{ forecastVar }} based on {{ modelName }} Model</h2>
+                <table>
+                    <tr>
+                        <th>{{ modelName }}</th>
+                        <th>  Test Data </th>
+                        <th>  Plot Data </th>
+                    </tr>
+                    <tr>
+                        <td>Start of test data set: </td>
+                        <td> {{ testResults[-2] }} </td>
+                        <td> {{ testResultsPlot[-2] }} </td>
+                    </tr>
+                    <tr>
+                        <td>End of test data set: </td>
+                        <td> {{ testResults[-1] }} </td>
+                        <td> {{ testResultsPlot[-1] }} </td>
+                    </tr>
+                    <tr>
+                        <td>R squared: </td>
+                        <td> {{ testResults[0] }} </td>
+                        <td> {{ testResultsPlot[0] }} </td>
+                    </tr>
+                    <tr>
+                        <td>Explained variance: </td>
+                        <td> {{ testResults[1] }} </td>
+                        <td> {{ testResultsPlot[1] }} </td>
+                    </tr>
+                    <tr>
+                        <td>Mean Absolute Error [MW]: </td>
+                        <td> {{ testResults[2] }} </td>
+                        <td> {{ testResultsPlot[2] }} </td>
+                    </tr>
+                    <tr>
+                        <td>Mean Squared Error [MW<sup>2</sup>]: </td>
+                        <td> {{ testResults[3] }} </td>
+                        <td> {{ testResultsPlot[3] }} </td>
+                    </tr>
+                    <tr>
+                        <td>Root Mean Squared Error [MW]: </td>
+                        <td> {{ testResults[4] }} </td>
+                        <td> {{ testResultsPlot[4] }} </td>
+                    </tr>
+                </table>
+                <br>
+                <h2>Test Timeseries of {{ forecastVar }} for {{ plotDate }} Model</h2>
+                <canvas id="lineChart" width="900" height="400"></canvas>
+                <script>
+                    var ctx = document.getElementById("lineChart").getContext("2d");
+                    /*var xValues = new Array(0,1,2,3,4,5,6,7,8,9,10,11,12)
+                    var yValues = new Array(0,1,4,9,16,25,36,49,64,81,100,121,144)
+                    var yValues2 = new Array(1,1,2,3,5,8,13,21,34,55,89,144,233)*/
+                    var lineChart = new Chart(ctx, {
+                        type: "line",
+                        data: {
+                            labels: {{ xValues | safe }},
+                            datasets: [
+                                {
+                                    label: "True",
+                                    data: {{ yValues1 | safe }},
+                                    fill: false,
+                                    borderColor: "rgb(75,192,192)",
+                                    lineTension: 0.1
+                                }, 
+                                {
+                                    label: "Predicted by {{ modelName | safe}}",
+                                    data: {{ yValues2 | safe }},
+                                    fill: false,
+                                    borderColor: "rgb(192,75,192)",
+                                    lineTension: 0.1
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            scales: {
+                                xAxes: [{
+                                    scaleLabel: {
+                                        display: true,
+                                        labelString: 'time [hours]'
+                                    }
+                                }],
+                                yAxes: [{
+                                    scaleLabel: {
+                                        display: true,
+                                        labelString: ' {{ forecastVar }} [MW]'
+                                    }
+                                }]
+                            }
+                        }
+                    });
+                </script>
+            {% endif %}
+
+        </div>
+
+        <div id="footer">
+            <hr class="line">
+            <p>&copy; 2021 Darragh Clabby</p>
+            <p>
+                <!--
+                <a href="http://jigsaw.w3.org/css-validator/check/referer">
+                    <img style="border:0;width:88px;height:31px"
+                        src="http://jigsaw.w3.org/css-validator/images/vcss-blue"
+                        alt="Valid CSS!" />
+                </a>-->
+            </p>
+        </div>
+
+    </body>
+</html>  

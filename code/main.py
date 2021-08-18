@@ -12,47 +12,64 @@ Implements the following use cases:
     4. Visualize forecasts
 """
 import numpy as np
-from preProc import loadEirgridData, cleanData
-from featureEng import systemGenFeatureEng
-from trainModels import trainModels, testModels
+from datetime import datetime, timedelta #, date
+import pickle
+
+from preProc import loadEirgridData, cleanGridData, detrendData, readMetHistorical
+from featureEng import systemGenFeatureEng, standardizeFeatures
+from trainModels import trainModels, testModels, regression_results
 from collectData import collectEirgridData
-from datetime import datetime, date, timedelta
+from visualizeData import plotTestPred, plotForecast
+from postProc import intTestPreds, intForecast
 
-print("Welcome to GridForecaster 1.0, an application for generating forecasts for Ireland's electricity Grid using Machine Learning. GridForecaster was developed by Darragh Clabby.")
-
-tmp = input("What type of data do you want to forecast? Enter:\n   1 for Total System Power Generation (Default)  \n   2 for Total Power Demand \n   3 for Total Wind Power Generation \n")
-if tmp == '1':
-    forecastVar = 'SystemGeneration'
-elif tmp == '2':
-    forecastVar = 'SystemDemand'
-elif tmp == '3':
-    forecastVar = 'WindGeneration'
-else:
-    forecastVar = 'SystemGeneration'
-    print('Invalid input received, default of SystemGeneration will be used as forecast variable\n')
-# forecastVar = 'SystemGeneration'
+# Inputs:
+forecastVar = 'WindGeneration' #'SystemDemand' #'SystemGeneration' #
 
 try:
-    print('Attempting to load data from local file system...')
+    print('Attempting to load grid data from local file system...')
     gridData = loadEirgridData(forecastVar) # try to load data from previously downloaded files
-    #TODO: metData = loadMetData(forecastVar)
-    print('Data loaded successfully!')
+    print('Grid data loaded successfully!')
 except: # if files do not exist the data will need to be downloaded from the eirgrid dashboard
-    print('Data not found on local file system. Downloading data from source...')
+    print('Grid data not found on local file system. Downloading data from source...')
     collectEirgridData(datetime(2014,1,1), datetime(2021,6,30), forecastVar, saveFolder='data/Eirgrid')
     gridData = loadEirgridData(forecastVar)
-    #TODO: collectMetData(datetime(2014,1,1), datetime(2021,6,30), forecastVar, saveFolder='data/MetEireann')
-    #TODO: metData = loadMetData(forecastVar)
-    
-# Clean data
-gridData = cleanData(gridData)
+
+# Clean Grid data
+samplesPerHour = 4
+featureResolution = 4 # time resolution of features & labels... can still train at 15 min resolution, but x & y can use coarser resolution
+gridData = cleanGridData(gridData)
+gridDataDtr = detrendData(gridData, featureResolution)
+
+# load & clean meteorological data
+if forecastVar == 'WindGeneration' or forecastVar == 'SystemGeneration':
+    includeMet = True
+    metFile = 'data/MetEireann/Historical/hly532.csv' # wind data taken from Dublin Airport
+    # metFile = 'data/MetEireann/Historical/hly2275.csv' # wind data taken from Valentia Observatory
+    metData = readMetHistorical(metFile, gridData.index[0], gridData.index[-1], cols=['wdsp'])
+    # metData = metData.apply(lambda x: x**3) # wind power roughly proportional to cube of wind speed
+    metDataDtr = detrendData(metData)# featureResolution not specified, defaults to one - ok for met data since it is at hourly resolution
+    metDataDtr = metDataDtr.asfreq('15min', method='ffill') # convert to 15 min so that its on same resolution with grid data (need to do this after detrending, otherwise interpolated values will result in 0 difference)
+else:
+    includeMet = False
+# includeMet = False
 
 # Feature engineering
-dt = 4 # time resolution of features & labels... can still train at 15 min resolution, but x & y can use coarser resolution
-nSteps = 24*dt
-prevSteps = [np.arange(1,nSteps+1,dt)*-1, np.arange(1,nSteps+1,dt)*(-1) - (7*24*4) + nSteps]
-nextSteps = np.arange(0,nSteps,dt)
-x, y = systemGenFeatureEng(gridData, prevSteps, nextSteps)
+nSteps = 24*samplesPerHour
+if forecastVar == 'WindGeneration':
+    featureIndices = np.arange(featureResolution,nSteps,featureResolution)*-1 # don't include previous week's wind generation
+else:
+    featureIndices = [np.arange(featureResolution,nSteps,featureResolution)*-1, 
+                      np.arange(featureResolution,nSteps,featureResolution)*(-1) - (7*24*samplesPerHour) + nSteps]
+# featureIndices = [np.arange(featureResolution,nSteps,featureResolution)*-1, 
+#                   np.arange(featureResolution,nSteps,featureResolution)*(-1) - (7*24*samplesPerHour) + nSteps]
+
+labelIndices = np.arange(featureResolution,nSteps,featureResolution)
+#x, y = systemGenFeatureEng(gridData, featureIndices, labelIndices)
+x, y = systemGenFeatureEng(gridDataDtr, featureIndices, labelIndices)
+
+if includeMet:
+    xTmp, _ = systemGenFeatureEng(metDataDtr, labelIndices, []) # use labelIndices here since we want to use wind forecast in features
+    x = x.join(xTmp, how='left')
 
 # Split features & labels into test & train sets
 splitYear = '2019'
@@ -61,97 +78,59 @@ yTrain = y[:splitYear]
 xTest = x[str(int(splitYear)+1)] # 2020. Verify: (365 + 1)*24*4 = 35136 rows (note some 2021 data so future data for 2020-12-31 23:45 is available)
 yTest = y[str(int(splitYear)+1)]
 
+xTrain, xTest, sc = standardizeFeatures(xTrain, xTest)
+
+saveFeaturesLabels = False
+if saveFeaturesLabels:
+    featuresLabelsFile = 'data/featsLabs/' + forecastVar + 'FeatsLabs.dat'
+    with open(featuresLabelsFile, "wb") as f:
+        pickle.dump((xTrain, yTrain, xTest, yTest, sc), f)
+
 # Train/Tune models
-modelsToTrain = {'LR': {}, 'KNN':{}, 'RF':{'n_estimators': 10}} # train all models with default parameters, except RF
-# modelsToTrain = {'LR': {}, 'KNN':{'n_neighbors': 4}, 'RF':{'n_estimators': 10}} # specify some parameters
-# modelsToTrain = {
-#     'LR': {}, 
-#     'RF': {'n_estimators': [20, 50, 100], 'max_features': ['auto', 'sqrt', 'log2'], 'max_depth' : [i for i in range(5,15)]}, 
-#     'KNN':{'n_neighbors': [2,5,8], 'weights': ['uniform', 'distance']} 
-#     } # specify parameters to tune
+# modelsToTrain = {'LR': {}}
+modelsToTrain = {'LR':{}, 'NN':{'tol':25, 'verbose':True}, 'KN':{'n_neighbors': 4}, 'RF':{'n_estimators': 10}}#, 'SV':{}}
 models = trainModels(xTrain, yTrain, modelsToTrain)
-yPred = testModels(xTest, yTest, models)
+
+# Test models
+yPred, testMetrics = testModels(xTest, yTest, models)
+yTestInt, yPredInt = intTestPreds(yTest, yPred, gridData)
+testMetricsInt = {}
+print("...\nTest metrics on integrated data")
+for model in yPredInt.keys():
+    testMetricsInt[model] = regression_results(yTestInt, yPredInt[model])
 
 # Visualize test results
-#TODO
-import matplotlib.pyplot as plt
-startDate = datetime(2020,3,20)
-iPlot = np.where(yTest.index == startDate.strftime("%Y-%m-%d %H:%M:%S"))[0].astype(int)[0]
-timeVec = [(startDate + timedelta(minutes=int(n*15))).strftime("%H:%M") for n in nextSteps]
-plt.figure(iPlot,figsize = (16,4))
-# plt.plot(np.array(yTest)[iPlot,:])
-plt.plot(timeVec, yTest.loc[startDate])
-for modelkey in yPred:
-    plt.plot(timeVec, yPred[modelkey][iPlot, :], linestyle='--')
-plt.title(startDate.strftime('%d-%b-%Y'))
-plt.ylabel('System Generation [MW]')
-plt.legend(['test'] + [k for k in yPred.keys()])
-plt.ylim((0, 7000))
-
+startDate = datetime(2020,3,11) 
+plotTestPred(yTestInt, yPredInt, startDate)#, gridData)
 
 # Save models
-#TODO
+saveModels = False
+if saveModels:
+    modelFile = 'models/' + forecastVar + 'Models.dat'
+    with open(modelFile, "wb") as f:
+        pickle.dump((xTrain, yTrain, xTest, yTest, yTestInt, yPred, yPredInt, testMetrics, testMetricsInt, sc, models), f)
 
 # Generate a forecast
-endTime = date.today()
-startTime = endTime + timedelta(days=-7)
-forecastData = collectEirgridData(startTime, endTime, forecastVar)
-forecastData = cleanData(forecastData)
-x, y = systemGenFeatureEng(forecastData, prevSteps, []) # note: labels are not necessary here, so nextSteps should not be included
-
-
-
-
-# # Feature engineering
-# timeSteps = 4#[1,2,3,4]
-# gridData = prevTimeSteps(gridData, timeSteps)
-# gridData = dataDiff(gridData)
-# gridData.dropna(inplace=True)
-
-# # Split data into features/labels, and test/train
-# splitYear = '2019'
-# xTrain = gridData[:splitYear].drop([forecastVar], axis=1) # 2014 to 2019 - verify (6*365 + 1)*24*4 = 210336 rows - (no. time steps for difference, will produce NaNs)
-# yTrain = gridData.loc[:splitYear, forecastVar]
-# xTest = gridData[str(int(splitYear)+1)].drop([forecastVar], axis=1) # 2020 - verify (365 + 1)*24*4 = 35136 rows
-# yTest = gridData.loc[str(int(splitYear)+1), forecastVar]
-
-
-
-# # test the pre processing
-# gridData = loadData('SystemGeneration')
-# dfWindGen = loadData('WindGeneration')
-
-# gridData = cleanData(gridData)
-# dfWindGen = cleanData(dfWindGen)
-# # verify no. rows from 01/01/2014 to 30/06/2021 = (365*7 + 2 (leap years) + 31+28+31+30+31+30 (J,F,M,A,M,J) ) (24 hours x 4 per hour) = 262848
-
-# # test feature engineering
-# timeSteps = 4#[1,2,3,4]
-
-# gridData = prevTimeSteps(gridData, timeSteps)
-# gridData = dataDiff(gridData)
-# gridData.dropna(inplace=True)
-
-# dfWindGen = prevTimeSteps(dfWindGen, timeSteps)
-# dfWindGen = dataDiff(dfWindGen)
-# dfWindGen.dropna(inplace=True)
-
-
-# import matplotlib.pyplot as plt
-# data = gridData
-# data_columns = 'SystemGeneration'
-# data_365d_rol = data[data_columns].rolling(window = 365, center = True).mean()
-# data_7d_rol = data[data_columns].rolling(window = 7, center = True).mean()
-# fig, ax = plt.subplots(figsize = (11,4))# plotting daily data
-# ax.plot(data[data_columns], marker='.', markersize=2,
-# color='0.6',linestyle='None', label='Daily')# plotting 7-day rolling data
-# ax.plot(data_7d_rol, linewidth=2, label='7-d Rolling Mean')# plotting annual rolling data
-# ax.plot(data_365d_rol, color='0.2', linewidth=3, label='Trend (365-d Rolling Mean)')# Beautification of plot
-# # ax.xaxis.set_major_locator(mdates.YearLocator())
-# ax.legend()
-# ax.set_xlabel('Year')
-# ax.set_ylabel('Consumption (GWh)')
-# ax.set_title('Trends in Electricity Consumption')
+generateForecast = False
+if generateForecast:
+    #endTime = datetime(2021,8,15,15)
+    endTime = datetime.now().replace(second=0, microsecond=0, minute=15*(datetime.now().minute//15))
+    startTime = endTime + timedelta(days=-7)
+    forecastData = collectEirgridData(startTime, endTime, forecastVar)
+    forecastData = cleanGridData(forecastData)
+    forecastDataDtr = detrendData(forecastData, featureResolution)
+    
+    xForecast, _ = systemGenFeatureEng(forecastDataDtr, featureIndices, []) # note: labels are not necessary here, so labelIndices should not be included
+    iForecast = np.where(xForecast.index == endTime.strftime("%Y-%m-%d %H:%M:%S"))[0].astype(int)[0]
+    xForecast = sc.transform(xForecast)
+    forecastResults = {}
+    for key, value in models.items():
+        print('\nGenerating forecast using ' + key + ' model...')
+        yForecast = value.predict([xForecast[iForecast, :]])
+        yForecast = intForecast(yForecast, forecastData.loc[endTime])
+        forecastResults[key] = yForecast[0]
+    timeVec = [endTime + timedelta(minutes = int(n*(60/featureResolution))) for n in range(0,np.shape(yForecast)[1])]
+    plotForecast(timeVec, forecastResults)
 
 
 

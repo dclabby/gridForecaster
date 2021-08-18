@@ -13,6 +13,7 @@ from os.path import join, isdir
 from os import makedirs
 import pandas as pd
 import io
+import zipfile
 
 def collectEirgridData(startTime, endTime, tableName, saveFolder=''):
     """
@@ -84,7 +85,46 @@ def collectEirgridData(startTime, endTime, tableName, saveFolder=''):
         loopCounter += 1
     return df
     
-
-def collectMetData():
-    #TODO
+def collectMetData(stationID=[]):
+    if len(stationID) == 0:
+        stationID = {'Dublin Airport': ['532', [53.428 ,-6.241]], 'Valentia Observatory': ['2275', [51.938, -10.241]]}
+    for station in stationID:
+        print('...\nDownloading historical weather data for ' + station + ' (station ID: ' +  stationID[station][0] + ')')
+        url = 'https://cli.fusio.net/cli/climate_data/webdata/hly' + stationID[station][0] + '.zip'
+        r = requests.get(url, allow_redirects=True)
+        savePath = 'data/MetEireann/Historical'
+        zipTmp = 'hly' + stationID[station][0] + '.zip' #station + '.zip'
+        open(join(savePath, zipTmp), "wb").write(r.content)
+        # unzip csv
+        with zipfile.ZipFile(join(savePath, zipTmp),"r") as zip_ref:
+            zip_ref.extract('hly' + stationID[station][0] + '.csv', savePath)
     return None
+
+def getMetForecast(startTime='', endTime='', stationID=[]):
+    if len(stationID) == 0:
+        stationID = {'Dublin Airport': ['532', [53.428 ,-6.241]], 'Valentia Observatory': ['2275', [51.938, -10.241]]}
+        
+    if startTime == '':
+        startStr = ''
+    else:
+        startStr = startTime.strftime(';from=%Y-%m-%dT%H:%M')
+    
+    if endTime == '':
+        endStr = ''
+    else:
+        endStr = endTime.strftime(';to=%Y-%m-%dT%H:%M')
+    
+    for station in stationID:
+        print('...\nDownloading weather forecast data for ' + station + ' (station ID: ' +  stationID[station][0] + ')')
+        coords = stationID[station][1]
+        url='http://metwdb-openaccess.ichec.ie/metno-wdb2ts/locationforecast?lat=<LAT>;long=<LNG>'.replace('<LAT>', str(coords[0])).replace('<LNG>', str(coords[1]))
+        url =  url + startStr + endStr
+        r = requests.get(url, allow_redirects=True)    
+        savePath = 'data/MetEireann/Forecast'
+        filename = station.replace(' ', '') + '_' + datetime.date.today().strftime('%Y-%m-%d') + '.xml'
+        if not isdir(savePath):
+            makedirs(savePath)
+        open(join(savePath, filename), "wb").write(r.content)
+    #TODO - convert xml to csv
+    return None
+
